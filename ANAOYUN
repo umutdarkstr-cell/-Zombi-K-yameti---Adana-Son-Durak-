@@ -1,0 +1,427 @@
+#!/usr/bin/env node
+// ZOMBİ KIYAMETİ: ADANA - SON DURAK
+// Çok uzun metin tabanlı Node.js oyunu
+// Çalıştır: node index.js
+
+const readline = require('readline');
+const fs = require('fs');
+const path = require('path');
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const ask = (q) => new Promise(res => rl.question(q, ans => res(ans.trim())));
+
+const COLORS = {
+  reset: "\x1b[0m",
+  red: "\x1b[31m", green: "\x1b[32m", yellow: "\x1b[33m",
+  blue: "\x1b[34m", magenta: "\x1b[35m", cyan: "\x1b[36m",
+  white: "\x1b[37m", gray: "\x1b[90m", bold: "\x1b[1m", bgRed: "\x1b[41m"
+};
+const c = (color, text) => COLORS[color] + text + COLORS.reset;
+
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+async function typewrite(text, delay=15){
+  for(let ch of text){ process.stdout.write(ch); await sleep(delay); }
+  console.log();
+}
+function rand(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function choice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+const SAVE_FILE = path.join(__dirname, 'kayit.json');
+
+// --- OYUN VERİLERİ ---
+const ZOMBI_TURLERI = {
+  yuruyen: { ad: "Yürüyen", can: 30, hasar: [5,12], hiz: 1, aciklama: "Klasik, yavaş ama kalabalık." },
+  kosucu: { ad: "Koşucu", can: 45, hasar: [10,18], hiz: 3, aciklama: "Yeni dönüşmüş, çok hızlı!" },
+  siskan: { ad: "Şişkin", can: 90, hasar: [15,30], hiz: 1, aciklama: "Patlayınca asit saçar. Uzak dur!" },
+  hayalet: { ad: "Gölge", can: 25, hasar: [8,25], hiz: 4, aciklama: "Sessiz, karanlıkta görünmez." },
+  zırhlı: { ad: "Çevik Kuvvet Zombisi", can: 120, hasar: [12,20], hiz: 1, aciklama: "Eski polis, zırhı hala üzerinde." },
+  bagiran: { ad: "Bağıran", can: 50, hasar: [5,10], hiz: 2, aciklama: "Bağırırsa sürü çağırır!" }
+};
+
+const HARITA = {
+  "adana_hastane": { ad: "Çukurova Devlet Hastanesi", aciklama: "Koridorlar kan içinde. Jeneratör uğulduyor. İlaç deposu sağlam olabilir.", baglanti: ["seyhan_sokak", "hastane_cati", "bodrum"], loot: ["ilac", "sargi", "neşter"], tehlike: 3 },
+  "seyhan_sokak": { ad: "Seyhan Nehri Kenarı - Eski Sokak", aciklama: "Terk edilmiş arabalar. Nehirden çürük kokusu geliyor. Karşıda Adana Merkez Camii silüeti.", baglanti: ["adana_hastane", "buyuk_saat", "baraj_yolu"], loot: ["su", "konserve"], tehlike: 2 },
+  "buyuk_saat": { ad: "Büyük Saat Meydanı", aciklama: "Saat durmuş: 03:17. Meydanda dev bir çadır kent vardı, şimdi yanmış. Ordu buradan çekilmiş.", baglanti: ["seyhan_sokak", "kapali_carsi", "tren_gari"], loot: ["paletli_telsiz", "bıçak"], tehlike: 4 },
+  "kapali_carsi": { ad: "Adana Kapalı Çarşı", aciklama: "Kepenkler kapalı ama içeriden tıkırtılar geliyor. Baharat kokusu ve çürüme karışmış.", baglanti: ["buyuk_saat", "tepebag"], loot: ["baharat", "çakmak", "tuz"], tehlike: 2 },
+  "tepebag": { ad: "Tepebağ Höyüğü - Eski Evler", aciklama: "Tarihi taş evler. Yaşlılar burada barikat kurmuş. Güvenli bölge olabilir.", baglanti: ["kapali_carsi", "seyhan_sokak"], loot: ["ekmek", "zeytin"], tehlike: 1, guvenli: true },
+  "tren_gari": { ad: "Adana Tren Garı", aciklama: "Son tren raydan çıkmış. Vagonlarda mahsur kalanlar var... hala hareket ediyorlar.", baglanti: ["buyuk_saat", "otogar"], loot: ["levye", "kömür"], tehlike: 5 },
+  "otogar": { ad: "Adana Otogarı", aciklama: "Otobüsler birbirine girmiş. Anons sistemi hala 'Sayın yolcularımız...' diye cızırdıyor.", baglanti: ["tren_gari", "incirlik_yolu"], loot: ["benzin", "harita"], tehlike: 3 },
+  "incirlik_yolu": { ad: "İncirlik Yolu - Askeri Kontrol Noktası", aciklama: "ABD üssüne giden yol. Tank terk edilmiş. Üzerinde 'GERİ ÇEKİLİN' yazıyor.", baglanti: ["otogar", "incirlik_ussu"], loot: ["m4", "celik_yel"], tehlike: 5 },
+  "incirlik_ussu": { ad: "İncirlik Hava Üssü - SON UMUT", aciklama: "Son yayın buradan gelmişti. Eğer kurtarma varsa buradadır. Kapı kapalı, ışıklar yanıp sönüyor.", baglanti: ["incirlik_yolu"], loot: ["final"], tehlike: 10, final: true },
+  "hastane_cati": { ad: "Hastane Çatısı", aciklama: "Tüm Adana görünüyor. Dumanlar yükseliyor. Bir helikopter enkazı var.", baglanti: ["adana_hastane"], loot: ["dürbün", "isaret_fisegi"], tehlike: 2 },
+  "bodrum": { ad: "Hastane Morgu / Bodrum", aciklama: "Işıklar yok. Soğuk. Torbaların bazıları hareket ediyor.", baglanti: ["adana_hastane"], loot: ["morfın", "anahtar"], tehlike: 4 },
+  "baraj_yolu": { ad: "Seyhan Baraj Gölü Yolu", aciklama: "Baraj kapağı çatlamış. Su çekilmiş, çamurda cesetler ve bir balıkçı kulübesi.", baglanti: ["seyhan_sokak", "balikci_kulubesi"], loot: ["olta", "balik"], tehlike: 2 },
+  "balikci_kulubesi": { ad: "Balıkçı Kulübesi", aciklama: "İçeride yaşayan biri varmış. Günlükler ve Adana kebap tarifi... tuhaf.", baglanti: ["baraj_yolu"], loot: ["tuz", "gunluk"], tehlike: 1, guvenli: true },
+};
+
+const ESYALAR = {
+  su: { ad: "Su", tur: "tuketim", deger: 25, aciklama: "+25 Susuzluk" },
+  konserve: { ad: "Konserve Fasulye", tur: "tuketim", deger: 30, aciklama: "+30 Açlık" },
+  ekmek: { ad: "Bayat Ekmek", tur: "tuketim", deger: 15, aciklama: "+15 Açlık" },
+  ilac: { ad: "Antibiyotik", tur: "tuketim", deger: 40, aciklama: "+40 Can, enfeksiyonu azaltır" },
+  sargi: { ad: "Sargı Bezi", tur: "tuketim", deger: 20, aciklama: "+20 Can" },
+  bicak: { ad: "Kasap Bıçağı", tur: "silah", hasar: [12,18], dayaniklilik: 100, aciklama: "Adana işi, keskin." },
+  neşter: { ad: "Neşter", tur: "silah", hasar: [8,22], dayaniklilik: 60, aciklama: "Kritik vuruş şansı yüksek" },
+  levye: { ad: "Levye", tur: "silah", hasar: [15,20], dayaniklilik: 200, aciklama: "Kapı da açar, kafa da." },
+  m4: { ad: "M4 Tüfek", tur: "silah", hasar: [25,40], dayaniklilik: 150, mermi: "5.56mm", aciklama: "Askeri tüfek" },
+  benzin: { ad: "Benzin Bidonu", tur: "malzeme", aciklama: "Jeneratör ve molotof için" },
+  çakmak: { ad: "Zippo Çakmak", tur: "arac", aciklama: "Ateş yakar, moral verir" },
+  dürbün: { ad: "Dürbün", tur: "arac", aciklama: "Bir sonraki bölgeyi gözetle" },
+  paletli_telsiz: { ad: "Telsiz", tur: "gorev", aciklama: "Askeri frekansı dinle" },
+};
+
+const GOREVLER = [
+  { id: "ilac_bul", ad: "İlaç Bul", aciklama: "Tepebağ'daki yaşlı Ayşe Teyze için antibiyotik bul", hedef: "ilac", odul: "ekmek x3 ve bilgi" },
+  { id: "telsiz_tamir", ad: "Telsizi Tamir Et", aciklama: "Büyük Saat'teki telsizci için pil ve benzin bul", hedef: ["benzin", "paletli_telsiz"], odul: "Harita açılır" },
+  { id: "final_kod", ad: "Üs Kapı Kodu", aciklama: "İncirlik üssünün kapı kodunu bul. İpucu balıkçı günlüğünde.", hedef: "anahtar", odul: "Finale giriş" },
+];
+
+let oyuncu = {
+  ad: "İsimsiz",
+  can: 100, maxCan: 100,
+  aclik: 100, susuzluk: 100,
+  moral: 80,
+  konum: "adana_hastane",
+  envanter: ["bicak", "su", "su"],
+  silah: "bicak",
+  mermi: { "5.56mm": 30 },
+  gun: 1, saat: 8,
+  oldurme: 0,
+  enfeksiyon: 0,
+  gorevler: [],
+  kesfedilen: ["adana_hastane"],
+  bitirdiMi: false
+};
+
+function durumCubugu(deger, max=100){
+  let dolu = Math.round((deger/max)*10);
+  return "[" + "█".repeat(dolu) + "░".repeat(10-dolu) + `] ${deger}%`;
+}
+
+function oyuncuDurum(){
+  console.log("\n" + c("bold", `=== ${oyuncu.ad} - Gün ${oyuncu.gun} Saat ${oyuncu.saat}:00 ===`));
+  console.log(c("green", `Can: ${durumCubugu(oyuncu.can)}`) + (oyuncu.enfeksiyon>0 ? c("red", ` ENFEKSİYON %${oyuncu.enfeksiyon}`) : ""));
+  console.log(c("yellow", `Açlık: ${durumCubugu(oyuncu.aclik)}  Susuzluk: ${durumCubugu(oyuncu.susuzluk)}  Moral: ${durumCubugu(oyuncu.moral)}`));
+  console.log(c("cyan", `Konum: ${HARITA[oyuncu.konum].ad} | Öldürülen: ${oyuncu.oldurme}`));
+  let silah = ESYALAR[oyuncu.silah];
+  console.log(c("white", `Silah: ${silah ? silah.ad : "Yumruk"} (${silah?.hasar ? silah.hasar.join("-")+" hasar" : "5-8"})`));
+  console.log(c("gray", `Envanter: ${oyuncu.envanter.map(i=>ESYALAR[i]?.ad || i).join(", ") || "Boş"}`));
+}
+
+function lootYap(bolge){
+  let olasilik = rand(1,10);
+  if(olasilik < 4) return;
+  let lootList = HARITA[bolge].loot;
+  let item = choice(lootList);
+  if(item==="final") return;
+  oyuncu.envanter.push(item);
+  console.log(c("green", `\n[GANİMET] ${ESYALAR[item]?.ad || item} buldun!`));
+}
+
+async function savas(zombiTipi, adet=1){
+  let zombiProto = ZOMBI_TURLERI[zombiTipi];
+  let zombiler = [];
+  for(let i=0;i<adet;i++) zombiler.push({ ...zombiProto, can: zombiProto.can + rand(-10,20), id: i+1 });
+
+  console.log(c("bgRed", `\n!!! ${adet} adet ${zombiProto.ad} saldırıyor !!!`));
+  console.log(c("gray", zombiProto.aciklama));
+
+  while(zombiler.length>0 && oyuncu.can>0){
+    console.log("\n" + c("red", `--- SAVAŞ ---`));
+    zombiler.forEach(z=> console.log(` ${z.id}. ${z.ad} [${z.can} HP]`));
+    console.log(c("white", "\n[E] Saldır  [K] Kaç  [Ç] Çantadan eşya kullan  [B] Bağır (moral)"));
+    let sec = (await ask("> ")).toLowerCase();
+
+    if(sec==="k"){
+      if(rand(1,10) > zombiProto.hiz*2){
+        console.log(c("green", "Kaçmayı başardın! Ama bir şeyler düşürdün..."));
+        if(oyuncu.envanter.length>0) oyuncu.envanter.pop();
+        oyuncu.saat+=1;
+        return true;
+      } else {
+        console.log(c("red", "Kaçamadın!"));
+      }
+    } else if(sec==="ç"){
+      await envanterKullan(true);
+    } else if(sec==="b"){
+      console.log(c("yellow", "AVAZIN ÇIKTIĞI KADAR BAĞIRDIN: 'ADANA ZİRVEEEEE!!'"));
+      oyuncu.moral+=5;
+      if(zombiTipi==="bagiran"){ console.log(c("red", "HATA! Bağıran daha çok bağırdı, 2 zombi daha geldi!")); zombiler.push({...zombiProto, can:zombiProto.can, id: zombiler.length+1}); zombiler.push({...zombiProto, can:zombiProto.can, id: zombiler.length+2}); }
+    } else {
+      // saldırı
+      let silah = ESYALAR[oyuncu.silah] || { hasar: [5,8] };
+      let hasar = rand(silah.hasar[0], silah.hasar[1]);
+      if(oyuncu.silah==="neşter" && rand(1,4)===1){ hasar*=2; console.log(c("magenta", "KRİTİK! Neşter tam şah damarına!")); }
+      let hedef = zombiler[0];
+      hedef.can-=hasar;
+      console.log(c("green", `${hedef.ad}'ye ${hasar} hasar verdin!`));
+      if(hedef.can<=0){ console.log(c("cyan", `${hedef.ad} öldü!`)); zombiler.shift(); oyuncu.oldurme++; oyuncu.moral+=2; }
+    }
+
+    // zombiler saldırır
+    for(let z of zombiler){
+      if(oyuncu.can<=0) break;
+      let dmg = rand(z.hasar[0], z.hasar[1]);
+      oyuncu.can-=dmg;
+      oyuncu.enfeksiyon+= (zombiTipi==="siskan" ? 8 : 2);
+      console.log(c("red", `${z.ad} sana ${dmg} vurdu!`));
+      if(zombiTipi==="siskan" && z.can<20 && rand(1,2)===1){
+        console.log(c("bgRed", "ŞİŞKİN PATLADI! Asit her yere saçıldı!"));
+        oyuncu.can-=15;
+        z.can=0;
+      }
+    }
+    if(zombiler.length>0 && zombiler[0].can<=0) zombiler.shift();
+  }
+
+  if(oyuncu.can<=0){
+    await olumEkrani();
+    return false;
+  } else {
+    console.log(c("green", "\nBölge temizlendi. Nefes al..."));
+    lootYap(oyuncu.konum);
+    return true;
+  }
+}
+
+async function envanterKullan(savastaMi=false){
+  if(oyuncu.envanter.length===0){ console.log("Çanta boş."); return; }
+  console.log("\nÇanta:");
+  oyuncu.envanter.forEach((id,i)=> console.log(` ${i+1}. ${ESYALAR[id]?.ad || id} - ${ESYALAR[id]?.aciklama || ""}`));
+  let sec = await ask("Kullanmak için numara (iptal: 0): ");
+  let idx = parseInt(sec)-1;
+  if(isNaN(idx) || idx<0 || idx>=oyuncu.envanter.length) return;
+  let itemId = oyuncu.envanter[idx];
+  let item = ESYALAR[itemId];
+  if(!item){ oyuncu.envanter.splice(idx,1); return; }
+
+  if(item.tur==="tuketim"){
+    if(itemId==="su") oyuncu.susuzluk = Math.min(100, oyuncu.susuzluk+item.deger);
+    else if(itemId==="konserve" || itemId==="ekmek") oyuncu.aclik = Math.min(100, oyuncu.aclik+item.deger);
+    else if(itemId==="sargi" || itemId==="ilac"){ oyuncu.can = Math.min(100, oyuncu.can+item.deger); oyuncu.enfeksiyon = Math.max(0, oyuncu.enfeksiyon-15); }
+    console.log(c("green", `${item.ad} kullanıldı.`));
+    oyuncu.envanter.splice(idx,1);
+  } else if(item.tur==="silah"){
+    oyuncu.silah = itemId;
+    console.log(c("cyan", `${item.ad} kuşanıldı.`));
+  } else {
+    console.log(item.aciklama);
+  }
+}
+
+async function rastgeleOlay(){
+  if(rand(1,10)<4){
+    let olaylar = [
+      async () => { console.log(c("yellow", "\n[OLAY] Radyodan cızırtı: '...Adana'da kalan varsa... İncirlik... saat 06:00'da son tahliye...'")); oyuncu.moral+=10; },
+      async () => { console.log(c("gray", "\n[OLAY] Eski bir çocuk ağlaması duydun... ama kimse yok. Moral -5")); oyuncu.moral-=5; },
+      async () => { console.log(c("green", "\n[OLAY] Bir köpek sana konserve getirdi!")); oyuncu.envanter.push("konserve"); },
+      async () => { console.log(c("red", "\n[OLAY] Ayağın bir çukura girdi, bileğin burkuldu!")); oyuncu.can-=10; },
+      async () => { console.log(c("cyan", "\n[OLAY] Duvar yazısı: 'Kebapçı Mesut yaşıyor - Tepebağ'a gel'")); if(!oyuncu.kesfedilen.includes("tepebag")){ console.log("Yeni konum keşfedildi: Tepebağ!"); } },
+      async () => { console.log(c("red", "\n[OLAY] Gizli bir ısırık fark ettin. Enfeksiyon +10")); oyuncu.enfeksiyon+=10; },
+    ];
+    await choice(olaylar)();
+  }
+}
+
+async function bolgeyeGit(){
+  let mevcut = HARITA[oyuncu.konum];
+  console.log("\nGidebileceğin yerler:");
+  mevcut.baglanti.forEach((id,i)=>{
+    let b = HARITA[id];
+    let kesif = oyuncu.kesfedilen.includes(id) ? "" : c("yellow"," [YENİ]");
+    let tehlike = "!" .repeat(b.tehlike);
+    console.log(` ${i+1}. ${b.ad} ${c("red", tehlike)}${kesif}`);
+    if(oyuncu.envanter.includes("dürbün")){
+      console.log(c("gray", `    -> ${b.aciklama}`));
+    }
+  });
+  let sec = await ask("Nereye? (numara): ");
+  let idx = parseInt(sec)-1;
+  if(isNaN(idx) || idx<0 || idx>=mevcut.baglanti.length){ console.log("Geçersiz."); return; }
+  let hedefId = mevcut.baglanti[idx];
+  oyuncu.konum = hedefId;
+  if(!oyuncu.kesfedilen.includes(hedefId)) oyuncu.kesfedilen.push(hedefId);
+  oyuncu.saat+=1;
+  if(oyuncu.saat>=24){ oyuncu.saat=0; oyuncu.gun++; oyuncu.aclik-=15; oyuncu.susuzluk-=20; console.log(c("yellow", `\n--- Gün ${oyuncu.gun} --- Açlık ve susuzluk arttı.`)); }
+  if(oyuncu.aclik<=0){ oyuncu.can-=10; console.log(c("red", "Açlıktan ölüyorsun!")); }
+  if(oyuncu.susuzluk<=0){ oyuncu.can-=15; console.log(c("red", "Susuzluktan bayılıyorsun!")); }
+  if(oyuncu.enfeksiyon>=100){ console.log(c("bgRed", "ENFEKSİYON TAMAMEN VÜCUDUNU SARDI...")); await olumEkrani(true); return; }
+  if(oyuncu.enfeksiyon>50){ oyuncu.can-=5; console.log(c("red", `Enfeksiyon canını yakıyor! %${oyuncu.enfeksiyon}`)); }
+
+  console.log("\n" + c("bold", `>> ${HARITA[hedefId].ad}`));
+  await typewrite(HARITA[hedefId].aciklama, 10);
+  await rastgeleOlay();
+
+  // tehlike kontrol
+  let tehlikeSeviyesi = HARITA[hedefId].tehlike;
+  if(HARITA[hedefId].guvenli){
+    console.log(c("green", "[GÜVENLİ BÖLGE] Burada dinlenebilirsin. Can +10, Moral +10"));
+    oyuncu.can = Math.min(100, oyuncu.can+10);
+    oyuncu.moral = Math.min(100, oyuncu.moral+10);
+  } else {
+    if(rand(1,10) <= tehlikeSeviyesi){
+      let turler = Object.keys(ZOMBI_TURLERI);
+      let secilen = choice(turler);
+      let adet = rand(1, Math.ceil(tehlikeSeviyesi/2));
+      await savas(secilen, adet);
+    } else {
+      console.log(c("gray", "Etraf sessiz... şimdilik."));
+      lootYap(hedefId);
+    }
+  }
+
+  if(HARITA[hedefId].final){
+    await finalBolumu();
+  }
+}
+
+async function olumEkrani(enfekte=false){
+  console.log(c("bgRed", "\n\n========== ÖLDÜN =========="));
+  if(enfekte) await typewrite("Gözlerin karardı... Artık sen de onlardan birisin. Adana sokaklarında sonsuza kadar yürüyeceksin.", 20);
+  else await typewrite("Adana sıcağı bile seni ısıtamadı artık. Hikayen burada bitti.", 20);
+  console.log(c("white", `\nGün: ${oyuncu.gun}, Öldürülen Zombi: ${oyuncu.oldurme}, Keşfedilen: ${oyuncu.kesfedilen.length}/${Object.keys(HARITA).length}`));
+  console.log("\nTekrar denemek ister misin? (e/h)");
+  let s = await ask("> ");
+  if(s.toLowerCase()==="e"){ oyuncu.can=100; oyuncu.aclik=100; oyuncu.susuzluk=100; oyuncu.konum="adana_hastane"; } else { process.exit(0); }
+}
+
+async function finalBolumu(){
+  console.log(c("cyan", "\n\n===== FİNAL: İNCİRLİK HAVA ÜSSÜ ====="));
+  await typewrite("Kapıda bir panel var. Kod istiyor. Elindeki anahtar kartı okutuyorsun...", 15);
+  if(!oyuncu.envanter.includes("anahtar")){
+    console.log(c("red", "Anahtarın yok! Balıkçı kulübesindeki günlüğü ve hastane bodrumundaki anahtarı bulmalısın!"));
+    oyuncu.konum="incirlik_yolu";
+    return;
+  }
+  console.log(c("green", "Kod kabul edildi! Kapı açılıyor..."));
+  await typewrite("İçeride son çalışan jeneratör, bir pilot ve 3 asker var. Pilot bağırıyor: 'Son uçak 10 dakikaya kalkıyor! Bin!' ", 15);
+  console.log("\n[1] Uçağa bin ve kaç - Adana'yı terk et\n[2] Kal ve üssü savun - Kahraman ol\n[3] Telsizle son bir Adana kebap anonsu yap");
+  let sec = await ask("Seçim: ");
+  if(sec==="1"){
+    await typewrite("Uçak havalanıyor... Aşağıda Adana yanıyor ama sen gökyüzündesin. Seyhan Nehri son kez parlıyor. KURTULDUN. Ama Adana'yı asla unutmayacaksın.", 20);
+  } else if(sec==="2"){
+    await typewrite("M4'ü eline aldın. Kapıya barikat kurdunuz. Gelen sürü devasa... Son mermiye kadar savaştınız. Adana seni unutmayacak. EFSANE OLDUN.", 20);
+    await savas("zırhlı", 3);
+    await savas("bagiran", 2);
+    await savas("siskan", 1);
+    await typewrite("Sustu... Üs kurtuldu. Artık burası Yeni Adana.", 15);
+  } else {
+    await typewrite("Telsize sarıldın: 'Burası Adana! Burası Adana! Şalgam acılı olsun! Kebaplar bizden! Bizi duyuyor musunuz!' Cızırtıdan sonra bir ses: 'Duyuyoruz evlat... geliyoruz.' Umut var.", 20);
+  }
+  oyuncu.bitirdiMi=true;
+  console.log(c("bold", "\n*** OYUN BİTTİ ***"));
+  fs.writeFileSync("final_kayit.txt", `Oyuncu: ${oyuncu.ad}, Gün: ${oyuncu.gun}, Kill: ${oyuncu.oldurme}, Final: ${sec}`);
+  process.exit(0);
+}
+
+async function craftMenusu(){
+  console.log("\n--- CRAFT / ÜRETİM ---");
+  console.log("1. Molotof Kokteyli [benzin + ekmek bezi (sargi) + çakmak] = Zombilere alan hasarı");
+  console.log("2. Güçlendirilmiş Levye [levye + bant yok ama olsun: benzin + levye] = Hasar +5");
+  console.log("3. Şalgam Suyu [su + tuz + baharat] = Moral +20, Susuzluk +30");
+  console.log("4. Tuzlu Ekmek [ekmek + tuz] = Açlık +40");
+  let sec = await ask("Ne üretmek istersin? (iptal: 0): ");
+  if(sec==="1"){
+    if(oyuncu.envanter.includes("benzin") && oyuncu.envanter.includes("sargi") && oyuncu.envanter.includes("çakmak")){
+      oyuncu.envanter = oyuncu.envanter.filter(i=>!["benzin","sargi"].includes(i));
+      oyuncu.envanter.push("molotof");
+      ESYALAR["molotof"]={ ad:"Molotof", tur:"silah", hasar:[40,70], dayaniklilik:1, aciklama:"Tek kullanımlık, herkesi yakar" };
+      console.log(c("green","Molotof yapıldı!"));
+    } else console.log(c("red","Malzemen eksik!"));
+  } else if(sec==="3"){
+    if(oyuncu.envanter.includes("su") && oyuncu.envanter.includes("tuz")){
+      oyuncu.envanter.splice(oyuncu.envanter.indexOf("su"),1);
+      oyuncu.susuzluk = Math.min(100, oyuncu.susuzluk+30);
+      oyuncu.moral = Math.min(100, oyuncu.moral+20);
+      console.log(c("green","Ohhh mis gibi şalgam! Adanalı gibi hissettin."));
+    } else console.log(c("red","Su ve tuz lazım."));
+  } else if(sec==="4"){
+    if(oyuncu.envanter.includes("ekmek") && oyuncu.envanter.includes("tuz")){
+      oyuncu.envanter.splice(oyuncu.envanter.indexOf("ekmek"),1);
+      oyuncu.aclik = Math.min(100, oyuncu.aclik+40);
+      console.log(c("green","Tuzlu ekmek candır."));
+    } else console.log(c("red","Ekmek ve tuz lazım."));
+  }
+}
+
+async function kayitEt(){
+  fs.writeFileSync(SAVE_FILE, JSON.stringify(oyuncu, null, 2));
+  console.log(c("green","Oyun kaydedildi -> kayit.json"));
+}
+function kayitYukle(){
+  if(fs.existsSync(SAVE_FILE)){
+    try{ oyuncu = JSON.parse(fs.readFileSync(SAVE_FILE)); console.log(c("green","Kayıt yüklendi!")); return true; }catch(e){}
+  }
+  return false;
+}
+
+// --- ANA DÖNGÜ ---
+async function baslangic(){
+  console.clear();
+  console.log(c("red", `
+ ███████╗ ██████╗ ███╗   ███╗██████╗ ██╗    ██╗   ██╗ ██╗   ██╗  █████╗ ███╗   ███╗███████╗████████╗██╗
+ ╚══███╔╝██╔═══██╗████╗ ████║██╔══██╗██║    ██║  ██╔╝ ██║   ██║ ██╔══██╗████╗ ████║██╔════╝╚══██╔══╝██║
+   ███╔╝ ██║   ██║██╔████╔██║██████╔╝██║    ████╔╝   ██║   ██║ ███████║██╔████╔██║█████╗     ██║   ██║
+  ███╔╝  ██║   ██║██║╚██╔╝██║██╔══██╗██║    ██╔═██╗  ██║   ██║ ██╔══██║██║╚██╔╝██║██╔══╝     ██║   ██║
+ ███████╗╚██████╔╝██║ ╚═╝ ██║██████╔╝██║    ██║  ██╗ ╚██████╔╝ ██║  ██║██║ ╚═╝ ██║███████╗   ██║   ██║
+ ╚══════╝ ╚═════╝ ╚═╝     ╚═╝╚═════╝ ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝   ╚═╝   ╚═╝
+                                  ADANA - SON DURAK
+`));
+  await typewrite("Tarih: 2 Kasım 2026. Adana'da bilinmeyen bir virüs patladı. Seyhan Nehri kırmızı akıyor. Radyo sustu. Sen Çukurova Devlet Hastanesi'nde gözlerini açtın. Hemşire yok, doktor yok... sadece tırmalama sesleri var.", 12);
+
+  let devam = await ask("\nKayıtlı oyun var mı? Yükle (y) / Yeni oyun (n): ");
+  if(devam.toLowerCase()==="y"){
+    if(!kayitYukle()){
+      console.log("Kayıt bulunamadı, yeni oyun başlıyor.");
+    }
+  }
+  if(!oyuncu.ad || oyuncu.ad==="İsimsiz"){
+    let ad = await ask("\nAdın ne? (Adanalı bir isim koy): ");
+    if(ad) oyuncu.ad = ad;
+    else oyuncu.ad = "Garip";
+  }
+
+  console.log(c("cyan", `\nHoş geldin ${oyuncu.ad}. Komutlar: git, bak, envanter, kullan, craft, durum, kaydet, cik`));
+  console.log(c("gray", "İpucu: 'dürbün' bulursan bölgelere gitmeden etrafı görebilirsin. 'paletli_telsiz' final için önemli."));
+
+  while(true){
+    oyuncuDurum();
+    console.log(c("white", `\nNe yapmak istersin?`));
+    console.log(" [1] Etrafı ara / Haritayı aç (git)");
+    console.log(" [2] Envanteri aç (envanter)");
+    console.log(" [3] Craft yap");
+    console.log(" [4] Dinlen (1 saat uyu, can +5 ama açlık/susuzluk -5)");
+    console.log(" [5] Kaydet");
+    console.log(" [6] Çıkış");
+    let komut = (await ask("\n> ")).toLowerCase();
+
+    if(["1","git","harita","g","go"].includes(komut)){
+      await bolgeyeGit();
+    } else if(["2","envanter","e","çanta","inventory"].includes(komut)){
+      await envanterKullan(false);
+    } else if(["3","craft","üret"].includes(komut)){
+      await craftMenusu();
+    } else if(["4","dinlen","uyu","rest"].includes(komut)){
+      console.log(c("yellow", "Bir köşeye kıvrılıp uyuyorsun..."));
+      await sleep(1000);
+      oyuncu.saat+=1;
+      oyuncu.can = Math.min(100, oyuncu.can+5);
+      oyuncu.aclik-=5;
+      oyuncu.susuzluk-=5;
+      if(rand(1,10)>7){ console.log(c("red","Uyurken bir şey ısırdı!")); await savas(choice(Object.keys(ZOMBI_TURLERI)),1); }
+      else console.log("Biraz toparlandın.");
+    } else if(["5","kaydet","save"].includes(komut)){
+      await kayitEt();
+    } else if(["6","cik","exit","q"].includes(komut)){
+      console.log("Çıkılıyor... Adana seni bekleyecek.");
+      break;
+    } else {
+      console.log(c("gray","Anlamadım. 1-6 arası bir şey yaz, veya 'git' de."));
+    }
+
+    if(oyuncu.can<=0) await olumEkrani();
+  }
+  rl.close();
+}
+
+baslangic();
